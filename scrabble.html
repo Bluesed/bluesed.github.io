@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Scrabble Deluxe</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; touch-action: none; font-family: 'Courier New', monospace; }
+        canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+        
+        #ui {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; z-index: 100;
+        }
+
+        .hud-top {
+            padding: 15px; display: flex; flex-direction: column; align-items: center; gap: 10px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent); pointer-events: auto;
+        }
+
+        .hud-row { display: flex; align-items: center; gap: 20px; width: 100%; justify-content: center; }
+
+        .player-badge {
+            background: rgba(0, 0, 0, 0.9); color: #eee; padding: 8px 16px; border-radius: 12px;
+            font-size: 1rem; font-weight: bold; border: 2px solid #444; backdrop-filter: blur(5px);
+            text-transform: uppercase; box-shadow: 0 4px 10px rgba(0,0,0,0.5); transition: all 0.3s ease;
+            display: flex; flex-direction: column; align-items: center; min-width: 80px;
+        }
+        
+        .score-val { font-size: 1.4rem; color: #fff; }
+
+        .bag-count {
+            font-size: 0.8rem; color: #aaa; background: rgba(0,0,0,0.6); padding: 4px 8px;
+            border-radius: 6px; border: 1px solid #444; margin-top: 5px;
+        }
+
+        .btn-action {
+            background: #333; color: white; border: none; padding: 12px 40px; font-size: 1.1rem;
+            border-radius: 12px; font-family: inherit; font-weight: bold; cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4); transition: transform 0.1s, background-color 0.3s;
+            text-transform: uppercase; letter-spacing: 1px;
+        }
+        .btn-action:active { transform: translateY(2px); }
+
+        .hud-bottom {
+            padding: 20px; height: 180px; pointer-events: none; display: flex;
+            justify-content: center; align-items: flex-end; gap: 15px; position: relative;
+        }
+
+        .btn-small {
+            pointer-events: auto; background: rgba(0,0,0,0.6); border: 1px solid #555; color: #ccc;
+            padding: 8px 16px; border-radius: 20px; font-family: inherit; font-size: 0.8rem;
+            text-transform: uppercase; cursor: pointer; backdrop-filter: blur(4px); margin-bottom: 25px;
+            min-width: 80px;
+        }
+        .btn-small:active { background: rgba(0,0,0,0.8); }
+
+        .version-tag {
+            position: absolute; bottom: 5px; right: 10px;
+            color: #444; font-size: 0.7rem; pointer-events: none;
+        }
+
+        .p1-theme { border-color: #4facfe; color: #4facfe; box-shadow: 0 0 15px rgba(79, 172, 254, 0.3); }
+        .p2-theme { border-color: #ff6b6b; color: #ff6b6b; box-shadow: 0 0 15px rgba(255, 107, 107, 0.3); }
+        .active-turn { transform: scale(1.1); z-index: 10; border-width: 3px; }
+        .inactive-turn { opacity: 0.6; transform: scale(0.9); }
+    </style>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <div id="ui">
+        <div class="hud-top">
+            <div class="hud-row">
+                <div id="p1Badge" class="player-badge p1-theme active-turn">
+                    <span>Player 1</span>
+                    <span class="score-val" id="p1Score">0</span>
+                </div>
+                <button class="btn-action" id="endTurnBtn" style="background-color: #4facfe;">END TURN</button>
+                <div id="p2Badge" class="player-badge p2-theme inactive-turn">
+                    <span>Player 2</span>
+                    <span class="score-val" id="p2Score">0</span>
+                </div>
+            </div>
+            <div id="bagIndicator" class="bag-count">Tiles: 100</div>
+        </div>
+        <div class="hud-bottom">
+            <button class="btn-small" id="viewBtn">2D</button>
+            <button class="btn-small" id="recallBtn">Recall</button>
+            <button class="btn-small" id="shuffleBtn">Shuffle</button>
+            <div class="version-tag">v1.2.1</div>
+        </div>
+    </div>
+
+    <script>
+        // --- GAME STATE ---
+        const gameState = { 
+            turn: 1, p1Hand: [], p2Hand: [], p1Score: 0, p2Score: 0, tileBag: [], gameActive: true 
+        };
+        const SCORES = {'A':1,'B':3,'C':3,'D':2,'E':1,'F':4,'G':2,'H':4,'I':1,'J':8,'K':5,'L':1,'M':3,'N':1,'O':1,'P':3,'Q':10,'R':1,'S':1,'T':1,'U':1,'V':4,'W':4,'X':8,'Y':4,'Z':10, '_':0};
+        const DISTRIBUTION = {'A':9, 'B':2, 'C':2, 'D':4, 'E':12, 'F':2, 'G':3, 'H':2, 'I':9, 'J':1, 'K':1, 'L':4, 'M':2, 'N':6, 'O':8, 'P':2, 'Q':1, 'R':6, 'S':4, 'T':6, 'U':4, 'V':2, 'W':2, 'X':1, 'Y':2, 'Z':1, '_':2};
+
+        // --- AUDIO ---
+        const placeSound = new Audio('tile_play.wav');
+        placeSound.volume = 0.5;
+        const swapSound = new Audio('tile_play.wav'); 
+        swapSound.volume = 0.4;
+        const shuffleSound = new Audio('tile_swap.wav'); 
+        shuffleSound.volume = 0.4;
+
+        function playSnapSound() { placeSound.cloneNode(true).play().catch(e => {}); }
+        function playManualSwapSound() { swapSound.cloneNode(true).play().catch(e => {}); }
+        function playShuffleSound() { shuffleSound.cloneNode(true).play().catch(e => {}); }
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x222222);
+        scene.fog = new THREE.Fog(0x222222, 15, 60);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 18, 16); 
+
+        const hudScene = new THREE.Scene();
+        const aspect = window.innerWidth / window.innerHeight;
+        const frustumSize = 20;
+        const hudCamera = new THREE.OrthographicCamera(-frustumSize * aspect / 2, frustumSize * aspect / 2, frustumSize / 2, -frustumSize / 2, 1, 100);
+        hudCamera.position.z = 10;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.autoClear = false;
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 20, 10); dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024; dirLight.shadow.mapSize.height = 1024;
+        scene.add(dirLight);
+
+        const hudDirLight = new THREE.DirectionalLight(0xffffff, 0.8); hudDirLight.position.set(5, 10, 10); hudScene.add(hudDirLight);
+        const hudAmbient = new THREE.AmbientLight(0xffffff, 0.7); hudScene.add(hudAmbient);
+
+        function createLetterTexture(letter) {
+            const canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#f4e4bc'; ctx.fillRect(0,0,128,128);
+            ctx.fillStyle = 'rgba(100, 70, 50, 0.15)';
+            for(let i=0; i<8; i++) { ctx.fillRect(Math.random()*128, 0, 2 + Math.random()*8, 128); }
+            ctx.strokeStyle = '#d6c6a0'; ctx.lineWidth = 8; ctx.strokeRect(4,4,120,120);
+            if (letter !== '_') {
+                ctx.fillStyle = '#1a1a1a'; ctx.font = 'bold 85px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; 
+                ctx.fillText(letter, 64, 58); ctx.font = 'bold 30px sans-serif'; ctx.fillText(SCORES[letter]||0, 105, 100);
+            }
+            const tex = new THREE.CanvasTexture(canvas); tex.anisotropy = 4; return tex;
+        }
+
+        function createBoardTexture(text, color) {
+            const canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = color; ctx.fillRect(0,0,128,128);
+            if (text) {
+                ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText(text, 66, 66); ctx.fillStyle = '#fff'; ctx.font = 'bold 40px sans-serif'; ctx.fillText(text, 64, 64);
+            }
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        const matDefault = new THREE.MeshStandardMaterial({ color: 0xe8dcb5 });
+        const matTW = new THREE.MeshStandardMaterial({ map: createBoardTexture('TW', '#ff4d4d') });
+        const matDW = new THREE.MeshStandardMaterial({ map: createBoardTexture('DW', '#ffb3ba') });
+        const matTL = new THREE.MeshStandardMaterial({ map: createBoardTexture('TL', '#4169e1') });
+        const matDL = new THREE.MeshStandardMaterial({ map: createBoardTexture('DL', '#add8e6') });
+        const matCenter = new THREE.MeshStandardMaterial({ map: createBoardTexture('★', '#ff69b4') });
+        const matBase = new THREE.MeshStandardMaterial({ color: 0x3d3d3d });
+        const matRack = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.7 });
+
+        const materials = {
+            default: matDefault, tw: matTW, dw: matDW, tl: matTL, dl: matDL, center: matCenter, base: matBase, rack: matRack
+        };
+
+        const boardGroup = new THREE.Group(); const squares = []; scene.add(boardGroup);
+        const TILE_SIZE = 1; const gap = 0.05; const squareGeo = new THREE.BoxGeometry(TILE_SIZE, 0.1, TILE_SIZE);
+
+        function getSquareType(x, z) {
+            const ax = Math.abs(x), az = Math.abs(z);
+            if(x===0&&z===0)return 'center';
+            if((ax===7&&az===0)||(ax===0&&az===7)||(ax===7&&az===7))return 'tw';
+            if(ax===az&&(ax>=1&&ax<=4))return 'dw';
+            if((ax===1&&az===5)||(ax===5&&az===1)||(ax===5&&az===5)||(ax===0&&az===3)||(ax===3&&az===0))return 'tl';
+            if((ax===0&&az===3)||(ax===3&&az===0)||(ax===6&&az===2)||(ax===2&&az===6)||(ax===7&&az===3)||(ax===3&&az===7)||(ax===6&&az===6))return 'dl';
+            return 'default';
+        }
+
+        for (let x = -7; x <= 7; x++) {
+            for (let z = -7; z <= 7; z++) {
+                const type = getSquareType(x, z);
+                const square = new THREE.Mesh(squareGeo, materials[type]);
+                square.position.set(x * (TILE_SIZE + gap), 0, z * (TILE_SIZE + gap));
+                square.receiveShadow = true;
+                square.userData = { isBoard: true, occupied: false, type: type };
+                boardGroup.add(square); squares.push(square);
+            }
+        }
+        const baseMesh = new THREE.Mesh(new THREE.BoxGeometry(17, 0.5, 17), materials.base);
+        baseMesh.position.y = -0.3; baseMesh.receiveShadow = true; boardGroup.add(baseMesh);
+
+        const rackGroup = new THREE.Group(); hudScene.add(rackGroup);
+        rackGroup.rotation.x = -Math.PI / 12; rackGroup.position.set(0, -frustumSize/2 + 3.0, 0); 
+        const rackBase = new THREE.Mesh(new THREE.BoxGeometry(8.5, 1.4, 1.0), materials.rack);
+        const rackLip = new THREE.Mesh(new THREE.BoxGeometry(8.5, 0.3, 0.2), materials.rack);
+        rackLip.position.y = -0.6; rackLip.position.z = 0.5;
+        const rackBack = new THREE.Mesh(new THREE.BoxGeometry(8.5, 2.0, 0.2), materials.rack);
+        rackBack.position.y = 0.3; rackBack.position.z = -0.6;
+        rackGroup.add(rackBase); rackGroup.add(rackLip); rackGroup.add(rackBack);
+
+        const tileGeo = new THREE.BoxGeometry(0.9, 0.25, 0.9);
+        const tileSideMat = new THREE.MeshStandardMaterial({ color: 0xf4e4bc });
+
+        function createTileMesh(letter) {
+            const texture = createLetterTexture(letter);
+            const faceMat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.5 });
+            const mats = [tileSideMat, tileSideMat, faceMat, tileSideMat, tileSideMat, tileSideMat];
+            const tile = new THREE.Mesh(tileGeo, mats);
+            tile.castShadow = true;
+            tile.userData = { isTile: true, letter: letter, onBoard: false, owner: 0, currentSquare: null };
+            return tile;
+        }
+
+        function initBag() {
+            let bag = [];
+            for (const [letter, count] of Object.entries(DISTRIBUTION)) { for (let i = 0; i < count; i++) { bag.push(letter); } }
+            for (let i = bag.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [bag[i], bag[j]] = [bag[j], bag[i]]; }
+            return bag;
+        }
+        gameState.tileBag = initBag();
+        document.getElementById('bagIndicator').innerText = 'Tiles: ' + gameState.tileBag.length;
+
+        function drawTile(playerHand, ownerId) {
+            if (gameState.tileBag.length === 0) return;
+            const char = gameState.tileBag.pop();
+            const tile = createTileMesh(char);
+            tile.userData.owner = ownerId;
+            playerHand.push(tile);
+            rackGroup.add(tile);
+            document.getElementById('bagIndicator').innerText = 'Tiles: ' + gameState.tileBag.length;
+        }
+        for(let i=0; i<7; i++) drawTile(gameState.p1Hand, 1);
+        for(let i=0; i<7; i++) drawTile(gameState.p2Hand, 2);
+
+        function updateRackDisplay() {
+            const allTiles = gameState.p1Hand.concat(gameState.p2Hand);
+            allTiles.forEach(t => {
+                if(t.userData.onBoard) {
+                    if(t.parent === rackGroup) scene.add(t);
+                    t.visible = true;
+                } else {
+                    t.visible = false;
+                    if(t.parent !== rackGroup) rackGroup.add(t);
+                    t.scale.set(1,1,1);
+                    t.userData.currentSquare = null; 
+                }
+            });
+            const currentHand = gameState.turn === 1 ? gameState.p1Hand : gameState.p2Hand;
+            const rackTiles = currentHand.filter(t => !t.userData.onBoard);
+            rackTiles.forEach((tile, index) => {
+                tile.visible = true;
+                const startX = -3.3; const step = 1.1;
+                tile.position.set(startX + (index * step), 0, 0.6);
+                tile.rotation.set(Math.PI / 2, 0, 0); 
+                tile.userData.homePos = tile.position.clone();
+                tile.userData.homeRot = tile.rotation.clone();
+                tile.userData.rackIndex = index;
+            });
+        }
+
+        function shuffleRack() {
+            const hand = gameState.turn === 1 ? gameState.p1Hand : gameState.p2Hand;
+            const boardTiles = hand.filter(t => t.userData.onBoard);
+            const rackTiles = hand.filter(t => !t.userData.onBoard);
+            for (let i = rackTiles.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rackTiles[i], rackTiles[j]] = [rackTiles[j], rackTiles[i]]; }
+            if(gameState.turn === 1) gameState.p1Hand = [...boardTiles, ...rackTiles]; else gameState.p2Hand = [...boardTiles, ...rackTiles];
+            playShuffleSound();
+            updateRackDisplay();
+        }
+        function recallRack() {
+            const hand = gameState.turn === 1 ? gameState.p1Hand : gameState.p2Hand;
+            hand.forEach(tile => { 
+                if(tile.userData.onBoard && !tile.userData.locked) { 
+                    if(tile.userData.currentSquare) tile.userData.currentSquare.userData.occupied = false;
+                    tile.userData.onBoard = false; 
+                    tile.userData.currentSquare = null; 
+                } 
+            });
+            updateRackDisplay();
+        }
+        document.getElementById('shuffleBtn').addEventListener('click', shuffleRack);
+        document.getElementById('recallBtn').addEventListener('click', recallRack);
+
+        // --- VIEW TOGGLE ---
+        let isTopDown = false;
+        function toggleView() {
+            isTopDown = !isTopDown;
+            const btn = document.getElementById('viewBtn');
+            controls.reset(); // Clear previous state to avoid conflict
+            
+            if(isTopDown) {
+                // 2D Mode: Locked Rotation
+                controls.enableRotate = false;
+                controls.enableZoom = true;
+                controls.enablePan = true;
+                camera.position.set(0, 25, 0); 
+                camera.lookAt(0, 0, 0);
+                controls.target.set(0, 0, 0);
+                btn.innerText = "3D";
+            } else {
+                // 3D Mode: Full Freedom
+                controls.enableRotate = true;
+                controls.enableZoom = true;
+                controls.enablePan = true;
+                camera.position.set(0, 18, 16); 
+                camera.lookAt(0, 0, 0);
+                controls.target.set(0, 0, 0);
+                btn.innerText = "2D";
+            }
+            controls.update();
+        }
+        document.getElementById('viewBtn').addEventListener('click', toggleView);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true; controls.maxPolarAngle = Math.PI / 2.2; controls.minDistance = 5; controls.maxDistance = 30;
+
+        const raycaster = new THREE.Raycaster();
+        const pointer = new THREE.Vector2();
+        const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        let draggedTile = null; let isDragging = false; let dragOffset = new THREE.Vector3();
+        let sourceMode = ''; 
+
+        function updatePointer(event) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        }
+
+        function onPointerDown(event) {
+            if (event.target.tagName === 'BUTTON') return;
+            renderer.domElement.setPointerCapture(event.pointerId);
+            updatePointer(event);
+
+            // Disable controls momentarily to prevent camera movement on click
+            controls.enabled = false;
+
+            // 1. HUD Check
+            raycaster.setFromCamera(pointer, hudCamera);
+            const currentHand = gameState.turn === 1 ? gameState.p1Hand : gameState.p2Hand;
+            const rackTiles = currentHand.filter(t => !t.userData.onBoard && t.visible);
+            const intersectsHud = raycaster.intersectObjects(rackTiles);
+            
+            if(intersectsHud.length > 0) {
+                draggedTile = intersectsHud[0].object; isDragging = true;
+                sourceMode = 'hud';
+                scene.add(draggedTile); 
+                draggedTile.scale.set(1.2, 1.2, 1.2); 
+                const safeVec = new THREE.Vector3(0, 0, -10); safeVec.applyQuaternion(camera.quaternion);
+                draggedTile.position.copy(camera.position).add(safeVec);
+                raycaster.setFromCamera(pointer, camera);
+                const planeIntersect = new THREE.Vector3();
+                const hit = raycaster.ray.intersectPlane(dragPlane, planeIntersect);
+                if (hit) { draggedTile.position.copy(planeIntersect); dragOffset.set(0,0,0); }
+                draggedTile.position.y = 2.0; draggedTile.rotation.set(0,0,0);
+                return;
+            }
+
+            // 2. World Check
+            raycaster.setFromCamera(pointer, camera);
+            const boardTiles = currentHand.filter(t => t.userData.onBoard && !t.userData.locked);
+            const intersectsWorld = raycaster.intersectObjects(boardTiles);
+            if(intersectsWorld.length > 0) {
+                draggedTile = intersectsWorld[0].object; isDragging = true;
+                sourceMode = 'world';
+                if(draggedTile.userData.currentSquare) {
+                    draggedTile.userData.currentSquare.userData.occupied = false;
+                }
+                draggedTile.position.y = 2.0; draggedTile.scale.set(1.2, 1.2, 1.2);
+                const planeIntersect = new THREE.Vector3();
+                const hit = raycaster.ray.intersectPlane(dragPlane, planeIntersect);
+                if (hit) dragOffset.subVectors(draggedTile.position, planeIntersect); else dragOffset.set(0,0,0);
+                return;
+            }
+
+            // If nothing clicked, re-enable controls immediately
+            controls.enabled = true;
+        }
+
+        function onPointerMove(event) {
+            updatePointer(event);
+            if (!isDragging) {
+                raycaster.setFromCamera(pointer, hudCamera);
+                const currentHand = gameState.turn === 1 ? gameState.p1Hand : gameState.p2Hand;
+                const rackTiles = currentHand.filter(t => !t.userData.onBoard && t.visible);
+                const hitHud = raycaster.intersectObjects(rackTiles).length > 0;
+                raycaster.setFromCamera(pointer, camera);
+                const boardTiles = currentHand.filter(t => t.userData.onBoard && !t.userData.locked);
+                const hitWorld = raycaster.intersectObjects(boardTiles).length > 0;
+                document.body.style.cursor = (hitHud || hitWorld) ? 'pointer' : 'default';
+                return;
+            }
+            if(!draggedTile) return;
+            raycaster.setFromCamera(pointer, camera);
+            const planeIntersect = new THREE.Vector3();
+            if(raycaster.ray.intersectPlane(dragPlane, planeIntersect)) {
+                draggedTile.position.copy(planeIntersect.add(dragOffset));
+                draggedTile.position.y = 2.0;
+            }
+        }
+
+        function findNearestFreeSquare(startSquare) {
+            let closest = null;
+            let minDist = Infinity;
+            for(let sq of squares) {
+                if(!sq.userData.occupied) {
+                    const dist = startSquare.position.distanceTo(sq.position);
+                    if(dist < minDist) { minDist = dist; closest = sq; }
+                }
+            }
+            return closest;
+        }
+
+        function onPointerUp(event) {
+            renderer.domElement.releasePointerCapture(event.pointerId);
+            updatePointer(event);
+
+            // Re-enable controls, but properties (rotate/zoom) set in toggleView remain active
+            controls.enabled = true;
+
+            if(isDragging && draggedTile) {
+                draggedTile.scale.set(1,1,1);
+                let actionTaken = false;
+
+                // 1. SWAP IN RACK
+                raycaster.setFromCamera(pointer, hudCamera);
+                const currentHand = gameState.turn === 1 ? gameState.p1Hand : gameState.p2Hand;
+                const rackTiles = currentHand.filter(t => !t.userData.onBoard && t !== draggedTile);
+                const intersectsRack = raycaster.intersectObjects(rackTiles);
+                if (intersectsRack.length > 0) {
+                    const targetTile = intersectsRack[0].object;
+                    const handArr = (gameState.turn === 1) ? gameState.p1Hand : gameState.p2Hand;
+                    const idx1 = handArr.indexOf(draggedTile);
+                    const idx2 = handArr.indexOf(targetTile);
+                    if (idx1 > -1 && idx2 > -1) {
+                        [handArr[idx1], handArr[idx2]] = [handArr[idx2], handArr[idx1]];
+                        rackGroup.add(draggedTile); 
+                        updateRackDisplay(); 
+                        playManualSwapSound();
+                        actionTaken = true;
+                    }
+                }
+
+                // 2. DROP ON BOARD
+                if(!actionTaken) {
+                    const downRay = new THREE.Raycaster(draggedTile.position, new THREE.Vector3(0, -1, 0));
+                    const hits = downRay.intersectObjects(squares);
+                    if(hits.length > 0 && hits[0].distance < 4) {
+                        let targetSquare = hits[0].object;
+                        if(targetSquare.userData.occupied) {
+                            const freeSquare = findNearestFreeSquare(targetSquare);
+                            if(freeSquare) targetSquare = freeSquare;
+                        }
+                        if(!targetSquare.userData.occupied) {
+                            draggedTile.position.set(targetSquare.position.x, 0.2, targetSquare.position.z);
+                            draggedTile.rotation.set(0,0,0);
+                            draggedTile.userData.currentSquare = targetSquare;
+                            draggedTile.userData.onBoard = true;
+                            targetSquare.userData.occupied = true;
+                            playSnapSound();
+                            actionTaken = true;
+                        }
+                    }
+                }
+
+                // 3. RETURN TO RACK
+                if(!actionTaken) {
+                    rackGroup.add(draggedTile); 
+                    updateRackDisplay();
+                }
+                
+                isDragging = false; draggedTile = null; 
+            }
+        }
+
+        renderer.domElement.addEventListener('pointerdown', onPointerDown);
+        renderer.domElement.addEventListener('pointermove', onPointerMove);
+        renderer.domElement.addEventListener('pointerup', onPointerUp);
+
+        function calculateScore(newTiles) {
+            let turnScore = 0; let wordMult = 1;
+            newTiles.forEach(tile => {
+                let letterVal = SCORES[tile.userData.letter] || 0;
+                let sqType = tile.userData.currentSquare ? tile.userData.currentSquare.userData.type : 'default';
+                if(sqType === 'dl') letterVal *= 2; if(sqType === 'tl') letterVal *= 3;
+                if(sqType === 'dw' || sqType === 'center') wordMult *= 2; if(sqType === 'tw') wordMult *= 3;
+                turnScore += letterVal;
+            });
+            return turnScore * wordMult;
+        }
+
+        function updateUI() {
+            const p1Badge = document.getElementById('p1Badge'); const p2Badge = document.getElementById('p2Badge');
+            const endBtn = document.getElementById('endTurnBtn');
+            document.getElementById('p1Score').innerText = gameState.p1Score;
+            document.getElementById('p2Score').innerText = gameState.p2Score;
+            if(gameState.turn === 1) {
+                p1Badge.classList.add('active-turn'); p1Badge.classList.remove('inactive-turn');
+                p2Badge.classList.add('inactive-turn'); p2Badge.classList.remove('active-turn');
+                endBtn.style.backgroundColor = "#4facfe"; endBtn.style.boxShadow = "0 6px 0 #2b8ac6";
+            } else {
+                p2Badge.classList.add('active-turn'); p2Badge.classList.remove('inactive-turn');
+                p1Badge.classList.add('inactive-turn'); p1Badge.classList.remove('active-turn');
+                endBtn.style.backgroundColor = "#ff6b6b"; endBtn.style.boxShadow = "0 6px 0 #c92a2a";
+            }
+        }
+
+        function endTurn() {
+            const currentHand = gameState.turn === 1 ? gameState.p1Hand : gameState.p2Hand;
+            const placedThisTurn = currentHand.filter(t => t.userData.onBoard && !t.userData.locked);
+            if(placedThisTurn.length > 0) {
+               const points = calculateScore(placedThisTurn);
+               if(gameState.turn === 1) gameState.p1Score += points; else gameState.p2Score += points;
+               placedThisTurn.forEach(t => t.userData.locked = true);
+               for(let i=0; i<placedThisTurn.length; i++) drawTile(currentHand, gameState.turn);
+            }
+            gameState.turn = gameState.turn === 1 ? 2 : 1;
+            updateUI(); updateRackDisplay();
+        }
+        document.getElementById('endTurnBtn').addEventListener('click', endTurn);
+
+        window.addEventListener('resize', () => {
+            const width = window.innerWidth; const height = window.innerHeight;
+            camera.aspect = width / height; camera.updateProjectionMatrix();
+            const aspect = width / height;
+            hudCamera.left = -frustumSize * aspect / 2; hudCamera.right = frustumSize * aspect / 2;
+            hudCamera.top = frustumSize / 2; hudCamera.bottom = -frustumSize / 2;
+            hudCamera.updateProjectionMatrix();
+            rackGroup.position.set(0, -frustumSize/2 + 3.0, 0); 
+            renderer.setSize(width, height);
+        });
+
+        updateUI(); updateRackDisplay();
+        function animate() {
+            requestAnimationFrame(animate); controls.update();
+            renderer.clear(); renderer.render(scene, camera);
+            renderer.clearDepth(); renderer.render(hudScene, hudCamera);
+        }
+        animate();
+    </script>
+</body>
+</html>
